@@ -1,4 +1,7 @@
-import { checkWorldInfo } from '/scripts/world-info.js';
+import {
+    checkWorldInfo,
+    world_info_include_names,
+} from '/scripts/world-info.js';
 import { setCharacterId, setCharacterName } from '/script.js';
 import { kai_settings } from '/scripts/kai-settings.js';
 import {
@@ -175,6 +178,13 @@ async function scanDrafts(cycle, messages) {
     const originalCharacterId = c.characterId;
     const originalCharacterName = c.name2;
     const discoveries = [];
+    const formatForScan = (message, text) => {
+        if (!world_info_include_names || !message.name) {
+            return text;
+        }
+
+        return `${message.name}: ${text}`;
+    };
     try {
         for (const { index, message } of messages) {
             if (!sessionMatches(cycle)) return discoveries;
@@ -187,13 +197,43 @@ async function scanDrafts(cycle, messages) {
                 setCharacterName(c.characters[speakerId].name);
             }
             const history = c.chat.slice(0, index)
-                .filter(item => !item.is_system && typeof item.mes === 'string')
-                .map(item => stripReasoning(item.mes))
-                .filter(Boolean)
+                .filter(item =>
+                    !item.is_system &&
+                    typeof item.mes === 'string'
+                )
+                .map(item => ({
+                    message: item,
+                    text: stripReasoning(item.mes),
+                }))
+                .filter(({ text }) => Boolean(text))
+                .map(({ message, text }) =>
+                    formatForScan(message, text)
+                )
                 .reverse();
-            const draft = stripReasoning(message.mes);
-            if (!draft) continue;
-            const result = await checkWorldInfo([draft, ...history], c.maxContext, true);
+
+            // Current draft: scan thinking AND final response.
+            const draftText = [
+                message.extra?.reasoning,
+                message.mes,
+            ]
+                .filter(text =>
+                    typeof text === 'string' && text.trim()
+                )
+                .join('\n\n');
+
+            if (!draftText) {
+                continue;
+            }
+
+            const draft = formatForScan(message, draftText);
+
+            // SillyTavern applies its own scan-depth,
+            // keyword, regex, and conditional logic.
+            const result = await checkWorldInfo(
+                [draft, ...history],
+                c.maxContext,
+                true
+            );
             for (const entry of result.allActivatedEntries ?? []) discoveries.push(entry);
         }
     } finally {
