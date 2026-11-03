@@ -1,0 +1,7 @@
+.iwi-settings .inline-drawer-content { padding: 8px 12px 12px; }
+.iwi-settings input[type="number"] { display: block; width: 90px; margin: 4px 0 8px; }
+.iwi-settings label:not(.checkbox_label) { display: block; margin-top: 10px; }
+.iwi-settings .checkbox_label { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
+.iwi-settings .checkbox_label input { margin: 0; }
+.iwi-settings small { display: block; opacity: .8; line-height: 1.4; }
+.iwi-settings .iwi-status { margin: 12px 0 6px; padding: 6px 8px; border: 1px solid var(--SmartThemeBorderColor, #777); border-radius: 4px; overflow-wrap: anywhere; }

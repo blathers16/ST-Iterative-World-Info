@@ -1,0 +1,31 @@
+<div id="iwi-settings" class="iwi-settings">
+  <div class="inline-drawer">
+    <div class="inline-drawer-toggle inline-drawer-header">
+      <b>Iterative World Info</b>
+      <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+    </div>
+    <div class="inline-drawer-content">
+      <label class="checkbox_label" for="iwi_enabled">
+        <input id="iwi_enabled" type="checkbox" />
+        <span>Enable automatic lore-aware regeneration</span>
+      </label>
+      <label for="iwi_max_passes">Maximum generation passes</label>
+      <input id="iwi_max_passes" type="number" min="1" max="8" step="1" />
+      <small>3 = one draft and up to two revisions; more passes may use substantial time/tokens.</small>
+      <label class="checkbox_label" for="iwi_same_seed">
+        <input id="iwi_same_seed" type="checkbox" />
+        <span>Reuse the same seed for every pass (KoboldCpp Text Completion / KoboldAI)</span>
+      </label>
+      <label class="checkbox_label" for="iwi_notifications">
+        <input id="iwi_notifications" type="checkbox" />
+        <span>Show status notifications</span>
+      </label>
+      <label class="checkbox_label" for="iwi_debug">
+        <input id="iwi_debug" type="checkbox" />
+        <span>Detailed logs in browser console</span>
+      </label>
+      <div id="iwi_status" class="iwi-status" role="status">Idle</div>
+      <small>Drafts are scanned without thinking text. Generated drafts are replaced, not fed back as instructions. In groups, the generated speaker batch is replayed in its original order.</small>
+    </div>
+  </div>
+</div>
