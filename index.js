@@ -13,6 +13,7 @@ const DEFAULTS = Object.freeze({
     sameSeed: true,
     notifications: true,
     debug: false,
+    logLoreText: false,
 });
 
 let current = null;
@@ -75,22 +76,65 @@ function restoreSeed(cycle) {
     if (record.target.seed === record.seed) record.target.seed = record.original;
     cycle.seedState = null;
 }
+// Logs are independent of the Debug setting and are intentionally NOT collapsed.
+const LORE_PREFIX = '[IWI-LORE]';
+
+function logLoreContent(cycle, label, entry, warning = false) {
+    const world = entry.world ?? 'Unknown World';
+    const name = entry.comment || `UID ${entry.uid ?? 'unknown'}`;
+    const heading = `${LORE_PREFIX} ${cycle.speakerName} | ${label} | ${world} / ${name}`;
+    const line = settings().logLoreText
+        ? `${heading}\n\n${entry.content ?? ''}`
+        : heading;
+    if (warning) console.warn(line);
+    else console.info(line);
+}
+
+/**
+ * Record actual changes to the lore supplied to this ONE character's prompt.
+ * Pass 1 is the baseline, not an extension addition. Report each addition once.
+ */
+function logPassLoreDelta(cycle) {
+    if (cycle.currentPass <= 1 || cycle.loggedPasses.has(cycle.currentPass)) return;
+    cycle.loggedPasses.add(cycle.currentPass);
+
+    const added = [];
+    for (const [key, entry] of cycle.suppliedThisPass) {
+        if (cycle.initialLore.has(key) || cycle.reportedAdditions.has(key)) continue;
+        cycle.reportedAdditions.add(key);
+        added.push(entry);
+    }
+
+    if (added.length) {
+        console.info(`${LORE_PREFIX} ${cycle.speakerName} | PASS ${cycle.currentPass} | NEW ADDITIONS (${added.length})`);
+        for (const entry of added) logLoreContent(cycle, `PASS ${cycle.currentPass} ADDED`, entry);
+    }
+
+    // This is not expected: retries should retain the original generation's lore.
+    const droppedBaseline = [...cycle.initialLore]
+        .filter(([key]) => !cycle.suppliedThisPass.has(key))
+        .map(([, entry]) => entry);
+    for (const entry of droppedBaseline) {
+        logLoreContent(cycle, `PASS ${cycle.currentPass} MISSING ORIGINAL`, entry, true);
+    }
+}
+
+/** Compare the final prompt's activated entries against the original prompt. */
 function logFinalLoreDelta(cycle, stable) {
     const original = cycle.initialLore;
     const final = cycle.suppliedThisPass;
     const added = [...final].filter(([key]) => !original.has(key)).map(([, entry]) => entry);
-    const missing = [...cycle.desired].filter(([key]) => !final.has(key)).map(([, entry]) => entry);
-    const speaker = cycle.speakerName || 'Character';
-    console.groupCollapsed(`[IWI-LORE] ${speaker} | ${stable ? 'FINAL' : 'UNSTABLE'} | +${added.length}, missing ${missing.length}`);
-    for (const entry of added) {
-        console.info(`[IWI-LORE] ADDED | ${entry.world} / ${entry.comment || entry.uid}\n${entry.content ?? ''}`);
-    }
-    for (const entry of missing) {
-        console.warn(`[IWI-LORE] MISSING | ${entry.world} / ${entry.comment || entry.uid}\n${entry.content ?? ''}`);
-    }
-    console.info(`[IWI-LORE] Original: ${original.size} | Final: ${final.size} | Net: ${final.size - original.size}`);
-    console.groupEnd();
+    const removed = [...original].filter(([key]) => !final.has(key)).map(([, entry]) => entry);
+    const missing = [...cycle.desired]
+        .filter(([key]) => !final.has(key) && !original.has(key))
+        .map(([, entry]) => entry);
+
+    console.info(`${LORE_PREFIX} ${cycle.speakerName} | ${stable ? 'FINAL' : 'UNSTABLE'} | Original ${original.size} → Final ${final.size} | ADDED ${added.length} | REMOVED ${removed.length} | UNSUPPLIED ${missing.length}`);
+    for (const entry of added) logLoreContent(cycle, 'FINAL ADDED', entry);
+    for (const entry of removed) logLoreContent(cycle, 'FINAL REMOVED (ERROR)', entry, true);
+    for (const entry of missing) logLoreContent(cycle, 'FINAL UNSUPPLIED (ERROR)', entry, true);
 }
+
 function finish(cycle, message, notify = false, warning = false, report = false) {
     if (current !== cycle) return;
     if (report) logFinalLoreDelta(cycle, !warning);
@@ -131,6 +175,8 @@ function onGenerationStarted(type, _options, dryRun) {
         suppliedThisPass: new Map(),
         initialLore: new Map(),
         desired: new Map(),
+        reportedAdditions: new Set(),
+        loggedPasses: new Set(),
         running: false,
         cancelled: false,
         seedState: null,
@@ -285,6 +331,9 @@ async function processCompletion(cycle) {
                 finish(cycle, 'No completed assistant reply to scan.');
                 return;
             }
+            // Log what was actually supplied for this generation before scanning
+            // the draft to discover lore needed for a future pass.
+            logPassLoreDelta(cycle);
             uiStatus(`Pass ${cycle.currentPass}: scanning ${messages.length} response(s)…`);
             const activatedByDraft = await scanDrafts(cycle, messages);
             if (!sessionMatches(cycle)) return;
@@ -340,6 +389,7 @@ async function init() {
     for (const [name, key] of [
         ['#iwi_same_seed', 'sameSeed'],
         ['#iwi_notifications', 'notifications'],
+        ['#iwi_log_lore_text', 'logLoreText'],
         ['#iwi_debug', 'debug'],
     ]) {
         $(name).prop('checked', s[key]).on('change', function () {
