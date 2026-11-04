@@ -20,10 +20,9 @@ export function isAssistantMessage(message) {
 export function assistantBatch(chat, startIndex) {
     const result = [];
     for (let index = Math.max(0, startIndex); index < chat.length; index++) {
-        if (
-            isAssistantMessage(chat[index]) &&
-            (chat[index].mes.trim() || chat[index].extra?.reasoning?.trim())
-        ) {
+        if (isAssistantMessage(chat[index]) && (
+            chat[index].mes.trim() || chat[index].extra?.reasoning?.trim()
+        )) {
             result.push({ index, message: chat[index] });
         }
     }

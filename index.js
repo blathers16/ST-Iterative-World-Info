@@ -1,7 +1,4 @@
-import {
-    checkWorldInfo,
-    world_info_include_names,
-} from '/scripts/world-info.js';
+import { checkWorldInfo, world_info_include_names } from '/scripts/world-info.js';
 import { setCharacterId, setCharacterName } from '/script.js';
 import { kai_settings } from '/scripts/kai-settings.js';
 import {
@@ -78,8 +75,25 @@ function restoreSeed(cycle) {
     if (record.target.seed === record.seed) record.target.seed = record.original;
     cycle.seedState = null;
 }
-function finish(cycle, message, notify = false, warning = false) {
+function logFinalLoreDelta(cycle, stable) {
+    const original = cycle.initialLore;
+    const final = cycle.suppliedThisPass;
+    const added = [...final].filter(([key]) => !original.has(key)).map(([, entry]) => entry);
+    const missing = [...cycle.desired].filter(([key]) => !final.has(key)).map(([, entry]) => entry);
+    const speaker = cycle.speakerName || 'Character';
+    console.groupCollapsed(`[IWI-LORE] ${speaker} | ${stable ? 'FINAL' : 'UNSTABLE'} | +${added.length}, missing ${missing.length}`);
+    for (const entry of added) {
+        console.info(`[IWI-LORE] ADDED | ${entry.world} / ${entry.comment || entry.uid}\n${entry.content ?? ''}`);
+    }
+    for (const entry of missing) {
+        console.warn(`[IWI-LORE] MISSING | ${entry.world} / ${entry.comment || entry.uid}\n${entry.content ?? ''}`);
+    }
+    console.info(`[IWI-LORE] Original: ${original.size} | Final: ${final.size} | Net: ${final.size - original.size}`);
+    console.groupEnd();
+}
+function finish(cycle, message, notify = false, warning = false, report = false) {
     if (current !== cycle) return;
+    if (report) logFinalLoreDelta(cycle, !warning);
     restoreSeed(cycle);
     current = null;
     if (pendingCompletion) {
@@ -88,6 +102,7 @@ function finish(cycle, message, notify = false, warning = false) {
     }
     uiStatus(message, notify, warning);
 }
+
 function cancel(reason) {
     if (!current) return;
     current.cancelled = true;
@@ -101,9 +116,7 @@ function cancel(reason) {
 }
 
 function onGenerationStarted(type, _options, dryRun) {
-    if (dryRun || !settings().enabled) return;
-    // Internal, nested generations are handled synchronously by the active cycle.
-    if (current) return;
+    if (dryRun || !settings().enabled || current) return;
     if (!['normal', 'regenerate', 'swipe', undefined, null].includes(type)) return;
     const c = ctx();
     const replaceLast = type === 'regenerate' || type === 'swipe';
@@ -111,17 +124,21 @@ function onGenerationStarted(type, _options, dryRun) {
         id: ++sessionCounter,
         chatId: c.getCurrentChatId(),
         groupId: String(c.groupId ?? ''),
-        firstIndex: Math.max(0, c.chat.length - (replaceLast && !c.groupId ? 1 : 0)),
+        speakerId: c.groupId ? Number(c.characterId) : null,
+        speakerName: c.name2 || c.characters[c.characterId]?.name || 'Character',
+        firstIndex: Math.max(0, c.chat.length - (replaceLast ? 1 : 0)),
         currentPass: 1,
         suppliedThisPass: new Map(),
+        initialLore: new Map(),
         desired: new Map(),
         running: false,
         cancelled: false,
         seedState: null,
     };
+    if (c.groupId && !Number.isInteger(cycle.speakerId)) return;
     current = cycle;
     prepareSeed(cycle);
-    uiStatus('Pass 1: generating initial draft…');
+    uiStatus(`${cycle.speakerName}: pass 1, generating initial draft…`);
 }
 
 function onWorldInfoActivated(entries) {
@@ -132,6 +149,7 @@ function onWorldInfoActivated(entries) {
         if (key) {
             cycle.suppliedThisPass.set(key, entry);
             cycle.desired.set(key, entry);
+            if (cycle.currentPass === 1) cycle.initialLore.set(key, entry);
         }
     }
 }
@@ -151,118 +169,78 @@ function scheduleCompletion(cycle) {
 
 function onGenerationEnded() {
     const cycle = current;
-    if (!cycle || cycle.running) return;
-    // Group wrappers emit completion for individual members; wait for the whole batch.
-    if (cycle.groupId) return;
+    if (!cycle || cycle.running || cycle.groupId) return;
     scheduleCompletion(cycle);
-}
-function onGroupWrapperFinished() {
-    const cycle = current;
-    if (!cycle || cycle.running || !cycle.groupId) return;
-    scheduleCompletion(cycle);
-}
-
-function collectMessages(cycle) {
-    const c = ctx();
-    return assistantBatch(c.chat, cycle.firstIndex);
 }
 
 /**
- * Scan a completed draft using SillyTavern's own WI scanner. The scanner operates
- * in dry-run mode, so it does not emit WORLD_INFO_ACTIVATED or commit timed WI effects.
- * Group speakers are temporarily selected because their individual lorebooks are
- * only available while their character is selected.
+ * The group wrapper AWAITS GROUP_MEMBER_DRAFTED before generating the next
+ * speaker. Finalize the previous member here, while it is still the chat tail.
  */
-async function scanDrafts(cycle, messages) {
-    const c = ctx();
-    const originalCharacterId = c.characterId;
-    const originalCharacterName = c.name2;
-    const discoveries = [];
-    const formatForScan = (message, text) => {
-        if (!world_info_include_names || !message.name) {
-            return text;
-        }
-
-        return `${message.name}: ${text}`;
-    };
-    try {
-        for (const { index, message } of messages) {
-            if (!sessionMatches(cycle)) return discoveries;
-            const speakerId = cycle.groupId ? resolveSpeaker(message, c.characters) : c.characterId;
-            if (cycle.groupId && speakerId === null) {
-                throw new Error(`Cannot identify the group speaker for draft at message ${index + 1}`);
-            }
-            if (cycle.groupId) {
-                setCharacterId(speakerId);
-                setCharacterName(c.characters[speakerId].name);
-            }
-            const history = c.chat.slice(0, index)
-                .filter(item =>
-                    !item.is_system &&
-                    typeof item.mes === 'string'
-                )
-                .map(item => ({
-                    message: item,
-                    text: stripReasoning(item.mes),
-                }))
-                .filter(({ text }) => Boolean(text))
-                .map(({ message, text }) =>
-                    formatForScan(message, text)
-                )
-                .reverse();
-
-            // Current draft: scan thinking AND final response.
-            const draftText = [
-                message.extra?.reasoning,
-                message.mes,
-            ]
-                .filter(text =>
-                    typeof text === 'string' && text.trim()
-                )
-                .join('\n\n');
-
-            if (!draftText) {
-                continue;
-            }
-
-            const draft = formatForScan(message, draftText);
-
-            // SillyTavern applies its own scan-depth,
-            // keyword, regex, and conditional logic.
-            const result = await checkWorldInfo(
-                [draft, ...history],
-                c.maxContext,
-                true
-            );
-            for (const entry of result.allActivatedEntries ?? []) discoveries.push(entry);
-        }
-    } finally {
-        if (cycle.groupId) {
-            setCharacterId(originalCharacterId);
-            setCharacterName(originalCharacterName);
-        }
-    }
-    return uniqueEntries(discoveries);
+async function onGroupMemberDrafted(_nextSpeakerId) {
+    const cycle = current;
+    if (cycle?.groupId && !cycle.running) await finalizeGroupMember(cycle);
 }
 
-/** Strip only the current response batch, retaining the user's message. */
-async function deleteBatch(cycle) {
+/** Final member: this event is awaited after the wrapper ends. */
+async function onGroupWrapperFinished() {
+    const cycle = current;
+    if (cycle?.groupId && !cycle.running) await finalizeGroupMember(cycle);
+}
+
+async function finalizeGroupMember(cycle) {
+    if (!sessionMatches(cycle) || cycle.running) return;
     const c = ctx();
-    const currentMessages = collectMessages(cycle);
-    // A group send may append its user message AFTER GENERATION_STARTED. Do not
-    // mistake that user message for part of the assistant batch.
-    const firstAssistantIndex = currentMessages[0]?.index;
-    const continuousTail = firstAssistantIndex !== undefined
-        && firstAssistantIndex >= cycle.firstIndex
-        && firstAssistantIndex + currentMessages.length === c.chat.length
-        && currentMessages.every(({ index }, i) => index === firstAssistantIndex + i);
-    if (!continuousTail) {
-        throw new Error('Chat changed while validating; refusing to delete unrelated messages');
+    const restoreId = c.characterId;
+    const restoreName = c.name2;
+    cycle.running = true;
+    try {
+        // GROUP_MEMBER_DRAFTED has already selected the NEXT speaker; scanning
+        // and regenerating must temporarily use the PREVIOUS speaker instead.
+        setCharacterId(cycle.speakerId);
+        setCharacterName(cycle.speakerName);
+        await processCompletion(cycle);
+    } catch (error) {
+        console.error('[Iterative World Info] Failed to finalize group member', error);
+        finish(cycle, `Error in ${cycle.speakerName}: ${error?.message ?? error}`, true, true);
+    } finally {
+        setCharacterId(restoreId);
+        setCharacterName(restoreName);
     }
-    for (let i = 0; i < currentMessages.length; i++) {
-        if (!sessionMatches(cycle)) throw new Error('Chat switched during regeneration');
-        await ctx().deleteLastMessage();
+}
+
+/** Only inspect the one completed response at the end of the chat. */
+function collectMessages(cycle) {
+    const c = ctx();
+    const messages = assistantBatch(c.chat, cycle.firstIndex);
+    const last = messages.at(-1);
+    if (!last || last.index !== c.chat.length - 1) return [];
+    if (cycle.groupId && resolveSpeaker(last.message, c.characters) !== cycle.speakerId) return [];
+    return [last];
+}
+
+/** Scan this message's thinking and visible text, plus prior visible history. */
+async function scanDrafts(cycle, messages) {
+    const c = ctx();
+    const discoveries = [];
+    const format = (message, text) =>
+        world_info_include_names && message.name ? `${message.name}: ${text}` : text;
+    for (const { index, message } of messages) {
+        if (!sessionMatches(cycle)) return discoveries;
+        const history = c.chat.slice(0, index)
+            .filter(item => !item.is_system && typeof item.mes === 'string')
+            .map(item => ({ message: item, text: stripReasoning(item.mes) }))
+            .filter(({ text }) => Boolean(text))
+            .map(({ message, text }) => format(message, text))
+            .reverse();
+        const draftText = [message.extra?.reasoning, message.mes]
+            .filter(text => typeof text === 'string' && text.trim())
+            .join('\n\n');
+        if (!draftText) continue;
+        const result = await checkWorldInfo([format(message, draftText), ...history], c.maxContext, true);
+        for (const entry of result.allActivatedEntries ?? []) discoveries.push(entry);
     }
+    return uniqueEntries(discoveries);
 }
 
 async function forceLore(cycle) {
@@ -274,54 +252,26 @@ async function forceLore(cycle) {
 
 async function replaceDrafts(cycle, messages) {
     const c = ctx();
-    if (!cycle.groupId) {
-        // Native regenerate deletes/replaces the last reply and handles both UI and persistence.
-        if (messages.length !== 1 || messages[0].index !== c.chat.length - 1) {
-            throw new Error('Cannot safely regenerate: expected one final assistant message');
-        }
-        cycle.suppliedThisPass.clear();
-        await forceLore(cycle);
-        await c.generate('regenerate');
-        return;
+    // Both solo and group mode regenerate ONE last assistant message.
+    if (messages.length !== 1 || messages[0].index !== c.chat.length - 1) {
+        throw new Error('Cannot safely regenerate: expected one final assistant message');
     }
-
-    // In a group, replay EXACTLY the speakers who responded, in the same order.
-    const speakers = messages.map(({ message }) => resolveSpeaker(message, c.characters));
-    if (speakers.some(speaker => speaker === null)) {
-        throw new Error('Group member lookup failed; leaving the original batch intact');
-    }
-    const backup = messages.map(({ message }) => structuredClone(message));
-    const groupBaseIndex = messages[0].index; // First assistant message, not the preceding user message.
-    let deleted = false;
+    const index = messages[0].index;
+    const backup = structuredClone(messages[0].message);
+    cycle.suppliedThisPass.clear();
+    await forceLore(cycle);
     try {
-        await deleteBatch(cycle);
-        deleted = true;
-        cycle.suppliedThisPass.clear();
-        for (const speaker of speakers) {
-            if (!sessionMatches(cycle)) throw new Error('Chat switched during group replay');
-            await forceLore(cycle);
-            // In group mode this invokes a one-member wrapper, which generates a
-            // fresh message without removing the preceding group member's message.
-            await ctx().generate('regenerate', { force_chid: speaker });
-            if (!collectMessages(cycle).length) {
-                throw new Error('Group replay did not produce a response');
-            }
+        await c.generate('regenerate');
+        if (!sessionMatches(cycle) || !collectMessages(cycle).length) {
+            throw new Error('Regeneration failed or the chat changed');
         }
     } catch (error) {
-        if (deleted && sessionMatches(cycle)) {
-            try {
-                // Best-effort rollback of the group batch. No user messages are touched.
-                while (ctx().chat.length > groupBaseIndex) {
-                    await ctx().deleteLastMessage();
-                }
-                for (const message of backup) {
-                    ctx().chat.push(message);
-                    await ctx().addOneMessage(message, { forceId: ctx().chat.length - 1 });
-                }
-                await ctx().saveChat();
-            } catch (rollbackError) {
-                console.error('[Iterative World Info] Could not restore original group drafts', rollbackError);
-            }
+        // SillyTavern removes the previous message before regenerating. If the
+        // request fails without replacing it, restore ONLY that message.
+        if (sessionMatches(cycle) && c.chat.length === index) {
+            c.chat.push(backup);
+            await c.addOneMessage(backup, { forceId: index });
+            await c.saveChat();
         }
         throw error;
     }
@@ -338,20 +288,22 @@ async function processCompletion(cycle) {
             uiStatus(`Pass ${cycle.currentPass}: scanning ${messages.length} response(s)…`);
             const activatedByDraft = await scanDrafts(cycle, messages);
             if (!sessionMatches(cycle)) return;
-            const missing = newEntries(activatedByDraft, new Set(cycle.suppliedThisPass.keys()));
+            // Every original and previously discovered entry remains mandatory.
+            const required = uniqueEntries([...cycle.desired.values(), ...activatedByDraft]);
+            const missing = newEntries(required, new Set(cycle.suppliedThisPass.keys()));
             for (const entry of missing) {
                 const key = entryKey(entry);
                 if (key) cycle.desired.set(key, entry);
             }
             if (!missing.length) {
-                finish(cycle, `Stable after ${cycle.currentPass} pass${cycle.currentPass === 1 ? '' : 'es'}; ${cycle.desired.size} lore entries used.`, cycle.currentPass > 1);
+                finish(cycle, `${cycle.speakerName}: stable after ${cycle.currentPass} pass${cycle.currentPass === 1 ? '' : 'es'}; ${cycle.desired.size} lore entries used.`, cycle.currentPass > 1, false, true);
                 return;
             }
             log('Newly required lore', missing.map(e => `${e.world} / ${e.comment || e.uid}`));
             if (cycle.currentPass >= settings().maxPasses) {
                 finish(cycle,
                     `Pass limit (${cycle.currentPass}) reached; ${missing.length} lore entr${missing.length === 1 ? 'y was' : 'ies were'} not included in the final generation.`,
-                    true, true);
+                    true, true, true);
                 return;
             }
             cycle.currentPass++;
@@ -399,6 +351,7 @@ async function init() {
     c.eventSource.on(c.eventTypes.GENERATION_STARTED, onGenerationStarted);
     c.eventSource.on(c.eventTypes.WORLD_INFO_ACTIVATED, onWorldInfoActivated);
     c.eventSource.on(c.eventTypes.GENERATION_ENDED, onGenerationEnded);
+    c.eventSource.on(c.eventTypes.GROUP_MEMBER_DRAFTED, onGroupMemberDrafted);
     c.eventSource.on(c.eventTypes.GROUP_WRAPPER_FINISHED, onGroupWrapperFinished);
     c.eventSource.on(c.eventTypes.GENERATION_STOPPED, () => cancel('Generation stopped by user.'));
     c.eventSource.on(c.eventTypes.CHAT_CHANGED, () => cancel('Chat switched.'));
