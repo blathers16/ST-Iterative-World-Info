@@ -83,7 +83,7 @@ function logLoreContent(cycle, label, entry, warning = false) {
     const world = entry.world ?? 'Unknown World';
     const name = entry.comment || `UID ${entry.uid ?? 'unknown'}`;
     const heading = `${LORE_PREFIX} ${cycle.speakerName} | ${label} | ${world} / ${name}`;
-    const line = settings().logLoreText
+    const line = settings().logLoreText && label !== "PASS 1 ORIGINAL"
         ? `${heading}\n\n${entry.content ?? ''}`
         : heading;
     if (warning) console.warn(line);
@@ -95,8 +95,18 @@ function logLoreContent(cycle, label, entry, warning = false) {
  * Pass 1 is the baseline, not an extension addition. Report each addition once.
  */
 function logPassLoreDelta(cycle) {
-    if (cycle.currentPass <= 1 || cycle.loggedPasses.has(cycle.currentPass)) return;
+    if (cycle.loggedPasses.has(cycle.currentPass)) return;
     cycle.loggedPasses.add(cycle.currentPass);
+
+    if (cycle.currentPass === 1) {
+        console.info(
+            `${LORE_PREFIX} ${cycle.speakerName} | PASS 1 | ORIGINAL LORE (${cycle.initialLore.size})`,
+        );
+        for (const entry of cycle.initialLore.values()) {
+            logLoreContent(cycle, "PASS 1 ORIGINAL", entry);
+        }
+        return;
+    }
 
     const added = [];
     for (const [key, entry] of cycle.suppliedThisPass) {
@@ -340,6 +350,22 @@ async function processCompletion(cycle) {
             // Every original and previously discovered entry remains mandatory.
             const required = uniqueEntries([...cycle.desired.values(), ...activatedByDraft]);
             const missing = newEntries(required, new Set(cycle.suppliedThisPass.keys()));
+            const discovered = missing.filter((entry) => {
+                const key = entryKey(entry);
+                return key && !cycle.desired.has(key);
+            });
+            if (discovered.length) {
+                console.info(
+                    `${LORE_PREFIX} ${cycle.speakerName} | PASS ${cycle.currentPass} | DISCOVERED (${discovered.length})`,
+                );
+                for (const entry of discovered) {
+                    logLoreContent(
+                        cycle,
+                        `PASS ${cycle.currentPass} DISCOVERED`,
+                        entry,
+                    );
+                }
+            }
             for (const entry of missing) {
                 const key = entryKey(entry);
                 if (key) cycle.desired.set(key, entry);
