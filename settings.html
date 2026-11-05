@@ -12,10 +12,6 @@
       <label for="iwi_max_passes">Maximum generation passes</label>
       <input id="iwi_max_passes" type="number" min="1" max="8" step="1" />
       <small>3 = one draft and up to two revisions; more passes may use substantial time/tokens.</small>
-      <label class="checkbox_label" for="iwi_same_seed">
-        <input id="iwi_same_seed" type="checkbox" />
-        <span>Reuse the same seed for every pass (KoboldCpp Text Completion / KoboldAI)</span>
-      </label>
       <label class="checkbox_label" for="iwi_notifications">
         <input id="iwi_notifications" type="checkbox" />
         <span>Show status notifications</span>
@@ -30,7 +26,7 @@
         <span>Detailed logs in browser console</span>
       </label>
       <div id="iwi_status" class="iwi-status" role="status">Idle</div>
-      <small>Scans the current draft including Qwen thinking. In group chats, each speaker is finalized independently before the next speaker generates. New lore is retained for that speaker’s retries and logged under [IWI-LORE].</small>
+      <small>Scans the current draft including thinking. In group chats, each speaker is finalized independently before the next speaker generates. New lore is retained for that speaker’s retries and logged under [IWI-LORE].</small>
     </div>
   </div>
 </div>

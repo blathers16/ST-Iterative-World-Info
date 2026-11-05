@@ -1,8 +1,7 @@
 import { checkWorldInfo, world_info_include_names } from '/scripts/world-info.js';
 import { setCharacterId, setCharacterName } from '/script.js';
-import { kai_settings } from '/scripts/kai-settings.js';
 import {
-    assistantBatch, entryKey, generateSeed, newEntries, resolveSpeaker, stripReasoning,
+    assistantBatch, entryKey, newEntries, resolveSpeaker, stripReasoning,
     uniqueEntries,
 } from './core.mjs';
 
@@ -10,7 +9,6 @@ const MODULE = 'iterative_world_info';
 const DEFAULTS = Object.freeze({
     enabled: false,
     maxPasses: 3,
-    sameSeed: true,
     notifications: true,
     debug: false,
     logLoreText: false,
@@ -48,34 +46,6 @@ function sessionMatches(cycle) {
         && c.getCurrentChatId() === cycle.chatId && String(c.groupId ?? '') === cycle.groupId;
 }
 
-function seedTarget(c) {
-    if (c.mainApi === 'kobold') return kai_settings;
-    if (c.mainApi === 'textgenerationwebui' && c.textCompletionSettings?.type === 'koboldcpp') {
-        return c.textCompletionSettings;
-    }
-    return null;
-}
-function prepareSeed(cycle) {
-    if (!settings().sameSeed) return;
-    const target = seedTarget(ctx());
-    if (!target) {
-        log('Same-seed option unavailable on this API. Regeneration will still proceed.');
-        return;
-    }
-    const original = target.seed;
-    const originalNumber = Number(original);
-    const seed = Number.isInteger(originalNumber) && originalNumber >= 0 ? originalNumber : generateSeed();
-    cycle.seedState = { target, original, seed };
-    target.seed = seed;
-    log('Using fixed seed', seed, originalNumber >= 0 ? '(original)' : '(temporary)');
-}
-function restoreSeed(cycle) {
-    const record = cycle?.seedState;
-    if (!record) return;
-    // Don't undo a seed manually changed during a generation.
-    if (record.target.seed === record.seed) record.target.seed = record.original;
-    cycle.seedState = null;
-}
 // Logs are independent of the Debug setting and are intentionally NOT collapsed.
 const LORE_PREFIX = '[IWI-LORE]';
 
@@ -148,7 +118,6 @@ function logFinalLoreDelta(cycle, stable) {
 function finish(cycle, message, notify = false, warning = false, report = false) {
     if (current !== cycle) return;
     if (report) logFinalLoreDelta(cycle, !warning);
-    restoreSeed(cycle);
     current = null;
     if (pendingCompletion) {
         clearTimeout(pendingCompletion);
@@ -160,7 +129,6 @@ function finish(cycle, message, notify = false, warning = false, report = false)
 function cancel(reason) {
     if (!current) return;
     current.cancelled = true;
-    restoreSeed(current);
     current = null;
     if (pendingCompletion) {
         clearTimeout(pendingCompletion);
@@ -189,11 +157,9 @@ function onGenerationStarted(type, _options, dryRun) {
         loggedPasses: new Set(),
         running: false,
         cancelled: false,
-        seedState: null,
     };
     if (c.groupId && !Number.isInteger(cycle.speakerId)) return;
     current = cycle;
-    prepareSeed(cycle);
     uiStatus(`${cycle.speakerName}: pass 1, generating initial draft…`);
 }
 
@@ -338,18 +304,26 @@ async function processCompletion(cycle) {
         while (sessionMatches(cycle)) {
             const messages = collectMessages(cycle);
             if (!messages.length) {
-                finish(cycle, 'No completed assistant reply to scan.');
+                finish(cycle, "No completed assistant reply to scan.");
                 return;
             }
             // Log what was actually supplied for this generation before scanning
             // the draft to discover lore needed for a future pass.
             logPassLoreDelta(cycle);
-            uiStatus(`Pass ${cycle.currentPass}: scanning ${messages.length} response(s)…`);
+            uiStatus(
+                `Pass ${cycle.currentPass}: scanning ${messages.length} response(s)…`,
+            );
             const activatedByDraft = await scanDrafts(cycle, messages);
             if (!sessionMatches(cycle)) return;
             // Every original and previously discovered entry remains mandatory.
-            const required = uniqueEntries([...cycle.desired.values(), ...activatedByDraft]);
-            const missing = newEntries(required, new Set(cycle.suppliedThisPass.keys()));
+            const required = uniqueEntries([
+                ...cycle.desired.values(),
+                ...activatedByDraft,
+            ]);
+            const missing = newEntries(
+                required,
+                new Set(cycle.suppliedThisPass.keys()),
+            );
             const discovered = missing.filter((entry) => {
                 const key = entryKey(entry);
                 return key && !cycle.desired.has(key);
@@ -371,25 +345,49 @@ async function processCompletion(cycle) {
                 if (key) cycle.desired.set(key, entry);
             }
             if (!missing.length) {
-                finish(cycle, `${cycle.speakerName}: stable after ${cycle.currentPass} pass${cycle.currentPass === 1 ? '' : 'es'}; ${cycle.desired.size} lore entries used.`, cycle.currentPass > 1, false, true);
+                finish(
+                    cycle,
+                    `${cycle.speakerName}: stable after ${cycle.currentPass} pass${cycle.currentPass === 1 ? "" : "es"}; ${cycle.desired.size} lore entries used.`,
+                    cycle.currentPass > 1,
+                    false,
+                    true,
+                );
                 return;
             }
-            log('Newly required lore', missing.map(e => `${e.world} / ${e.comment || e.uid}`));
+            log(
+                "Newly required lore",
+                missing.map((e) => `${e.world} / ${e.comment || e.uid}`),
+            );
             if (cycle.currentPass >= settings().maxPasses) {
-                finish(cycle,
-                    `Pass limit (${cycle.currentPass}) reached; ${missing.length} lore entr${missing.length === 1 ? 'y was' : 'ies were'} not included in the final generation.`,
-                    true, true, true);
+                finish(
+                    cycle,
+                    `Pass limit (${cycle.currentPass}) reached; ${missing.length} lore entr${missing.length === 1 ? "y was" : "ies were"} not included in the final generation.`,
+                    true,
+                    true,
+                    true,
+                );
                 return;
             }
             cycle.currentPass++;
-            uiStatus(`Pass ${cycle.currentPass}: regenerating with ${missing.length} newly activated entr${missing.length === 1 ? 'y' : 'ies'}…`);
+            uiStatus(
+                `Pass ${cycle.currentPass}: regenerating with ${missing.length} newly activated entr${missing.length === 1 ? "y" : "ies"}…`,
+            );
             await replaceDrafts(cycle, messages);
         }
+    } catch (error) {
+        // Preserve the actual error before the fallback runs.
+        finish(cycle, `Error: ${error?.message ?? error}`, true, true);
+        throw error;
     } finally {
         // The initial event handler owns the cycle; all revisions are completed here.
         if (current === cycle && !cycle.cancelled && cycle.running) {
-            // Unexpected early exit: never leave a temporary seed enabled.
-            finish(cycle, 'Generation cycle ended before validation finished.', true, true);
+            // Unexpected early exit: report incomplete validation.
+            finish(
+                cycle,
+                "Generation cycle ended before validation finished.",
+                true,
+                true,
+            );
         }
     }
 }
@@ -413,7 +411,6 @@ async function init() {
         c.saveSettingsDebounced();
     });
     for (const [name, key] of [
-        ['#iwi_same_seed', 'sameSeed'],
         ['#iwi_notifications', 'notifications'],
         ['#iwi_log_lore_text', 'logLoreText'],
         ['#iwi_debug', 'debug'],

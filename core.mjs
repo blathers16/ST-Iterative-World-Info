@@ -55,13 +55,3 @@ export function resolveSpeaker(message, characters) {
     const matching = characters.map((c, index) => ({ c, index })).filter(x => x.c?.name === message?.name);
     return matching.length === 1 ? matching[0].index : null;
 }
-
-export function generateSeed() {
-    const bytes = new Uint32Array(1);
-    if (typeof globalThis.crypto?.getRandomValues === 'function') {
-        globalThis.crypto.getRandomValues(bytes);
-        return bytes[0] & 0x7fffffff;
-    }
-    // crypto.getRandomValues is standard on the SillyTavern browser frontend.
-    return Math.floor(Math.random() * 2147483647);
-}
