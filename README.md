@@ -4,19 +4,39 @@
 
 Unlike SillyTavern's built-in **recursive scanning**, which can find keywords inside activated World Info entries, this extension scans a **newly generated draft**. In group chats, **each character's reply is handled independently**: the extension finishes that character's retries before the next member generates.
 
-## Installation (manual folder)
+## Installation (GitHub — recommended)
 
-**Updating an existing installation:** Extract this ZIP directly into your existing `ST-Iterative-World-Info` extension directory, overwriting the files there. The ZIP contains files at its root (no extra enclosing folder). Reload SillyTavern afterward.
+**Repository:** https://github.com/blathers16/ST-Iterative-World-Info
 
-For a new installation:
+1. Make sure **Git** is installed on the computer running SillyTavern. SillyTavern uses Git to install extensions from repositories.
+2. In SillyTavern, open **Extensions → Install Extension**.
+3. Paste this repository URL into the Git URL field:
 
-1. Extract the extension files into a folder named `ST-Iterative-World-Info`.
-2. Place that folder under `SillyTavern/data/<user-handle>/extensions/`. A common location is `SillyTavern/data/default-user/extensions/ST-Iterative-World-Info/`.
-3. Make sure `manifest.json`, `index.js`, `core.mjs`, `settings.html`, and `style.css` are directly inside the extension folder, without an extra nested directory.
-4. Reload SillyTavern, then open **Extensions → Iterative World Info**.
-5. Turn on **Enable automatic lore-aware regeneration** (off by default). Start with **Maximum generation passes = 3**.
+   ```text
+   https://github.com/blathers16/ST-Iterative-World-Info
+   ```
 
-SillyTavern's **Install Extension** field expects a Git repository URL rather than a local ZIP. If installing from an archive, extract and copy the folder manually.
+4. Install from the default branch (`main`). If you use multiple SillyTavern users, select the appropriate installation target (usually **Current User**).
+5. Once installation finishes, reload SillyTavern if the extension does not appear automatically.
+6. Open **Extensions** settings and expand **Iterative World Info**. Turn on **Enable automatic lore-aware regeneration** (off by default). Start with **Maximum generation passes = 3**.
+
+### Updating a GitHub installation
+
+In SillyTavern, open **Extensions → Manage Extensions**, find **Iterative World Info**, and use its **Update** action when a new version is available. Reload SillyTavern if prompted. Updates are pulled from the installed Git repository.
+
+### Switching from an older manual ZIP installation
+
+If you previously copied the extension into `data/<user-handle>/extensions/ST-Iterative-World-Info/` by hand, back up any local changes first. That directory usually has no Git metadata, so **do not assume the Install Extension tool can convert it into a Git-managed installation in place**. Move or remove the old extension folder before installing from the repository to avoid a destination-folder conflict. Do not keep two copies of the same extension active.
+
+### Manual installation (alternative)
+
+If you cannot use Git-based installation, download the repository's source ZIP from GitHub (**Code → Download ZIP**) and extract it. Place the folder containing `manifest.json` at:
+
+```text
+SillyTavern/data/<user-handle>/extensions/ST-Iterative-World-Info/
+```
+
+For a typical single-user installation, `<user-handle>` is `default-user`. Make sure `manifest.json` and `index.js` are directly inside the extension folder rather than inside another nested directory. Reload SillyTavern and enable the extension as described above. **Manual ZIP installations are not automatically updated through Git**; replace their files manually when updating.
 
 ## Example
 
