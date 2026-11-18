@@ -52,6 +52,8 @@ function build({
     let settingsSaves = 0;
     let restoredMessages = 0;
     let chatSaves = 0;
+    let groupGenerating = false;
+    const groupRetries = [];
 
     const ctx = {
         chat: [],
@@ -78,6 +80,10 @@ function build({
         saveSettingsDebounced: () => { settingsSaves++; },
         saveChat: async () => { chatSaves++; },
         addOneMessage: async () => { restoredMessages++; },
+        deleteLastMessage: async () => {
+            assert.ok(ctx.chat.at(-1) && !ctx.chat.at(-1).is_user);
+            ctx.chat.pop();
+        },
         renderExtensionTemplateAsync: async () => '<div>settings</div>',
         eventSource: {
             on(event, fn) { listeners.set(event, [...(listeners.get(event) || []), fn]); },
@@ -173,6 +179,39 @@ function build({
         };
     }
 
+    const generateGroupWrapper = async (byAutoMode, type, options) => {
+        assert.equal(groupGenerating, false, 'retries at wrapper end must use a NEW group wrapper');
+        assert.equal(type, 'normal');
+        assert.equal(byAutoMode, true, 'forced group retry must not capture user input');
+        assert.ok(Number.isInteger(options.force_chid));
+        groupRetries.push({ byAutoMode, type, speakerId: options.force_chid });
+        groupGenerating = true;
+        const speakerId = options.force_chid;
+        ctx.characterId = speakerId;
+        ctx.name2 = ctx.characters[speakerId].name;
+        await ctx.eventSource.emit('group_member_drafted', speakerId);
+        try {
+            if (generateError) throw generateError;
+            if (!drafts.length) throw new Error('Test fixture ran out of revised drafts');
+            const next = drafts.shift();
+            const nextMessage = typeof next === 'string' ? { mes: next } : next;
+            generated.push({ kind: 'group-normal', speakerId, seed: ctx.textCompletionSettings.seed });
+            ctx.chat.push(makeMessage(nextMessage, speakerId));
+            const supplied = supplyRequested
+                ? supplyRequested([...pendingForced], generated.length, ctx)
+                : pendingForced;
+            pendingForced = [];
+            await ctx.eventSource.emit('world_info_activated', supplied);
+            await ctx.eventSource.emit('generation_started', 'normal');
+            await ctx.eventSource.emit('generation_ended');
+        } finally {
+            groupGenerating = false; // upstream resets BEFORE GROUP_WRAPPER_FINISHED
+            ctx.characterId = undefined;
+            ctx.name2 = '';
+            await ctx.eventSource.emit('group_wrapper_finished');
+        }
+    };
+
     const kai_settings = { seed };
     const sandbox = {
         ...core,
@@ -186,9 +225,11 @@ function build({
         setCharacterId: id => { ctx.characterId = id; },
         setCharacterName: name => { ctx.name2 = name; },
         kai_settings,
+        generateGroupWrapper,
         document: { getElementById: id => id === 'iwi_status' ? statuses : null },
         globalThis: null,
     };
+    Object.defineProperty(sandbox, 'is_group_generating', { get: () => groupGenerating });
     sandbox.globalThis = sandbox;
     new vm.Script(source, { filename: 'index.js' }).runInNewContext(sandbox);
 
@@ -206,7 +247,7 @@ function build({
     }
 
     return {
-        ctx, ready: initPromise, logs, entries, forcedRequests, generated, scans, statuses, kai_settings, ui,
+        ctx, ready: initPromise, logs, entries, forcedRequests, generated, scans, statuses, kai_settings, ui, groupRetries,
         emit: (event, ...args) => ctx.eventSource.emit(event, ...args),
         makeMessage,
         user: (text = 'Go') => ({ is_user: true, is_system: false, name: 'User', mes: text }),
@@ -215,6 +256,7 @@ function build({
             await ctx.eventSource.emit('world_info_activated', initialLore);
         },
         speaker(id) { ctx.characterId = id; ctx.name2 = ctx.characters[id].name; },
+        setGroupGenerating(value) { groupGenerating = value; },
         async flushSolo() { await flushSolo(); },
         setChatId(value) { chatId = value; },
         setCheckbox(selector, value) {
@@ -382,6 +424,7 @@ test('group finalizes each character independently before the next begins', asyn
     await f.ready;
     f.ctx.chat.push(f.user('Enter the guild.'));
     f.speaker(0);
+    f.setGroupGenerating(true);
     await f.emit('generation_started', 'normal');
     await f.initial('An elf approaches Helena.', [entries.pirate], 0);
     f.speaker(1); // group wrapper has already selected Mio for the NEXT message
@@ -394,9 +437,13 @@ test('group finalizes each character independently before the next begins', asyn
 
     await f.emit('generation_started', 'normal');
     await f.initial('A dwarf approaches Mio.', [], 1);
+    f.setGroupGenerating(false); // last member is finalized after group wrapper resets the flag
     await f.emit('group_wrapper_finished');
     assert.equal(f.generated.length, 2);
     assert.equal(f.generated[1].speakerId, 1);
+    assert.equal(f.generated[1].kind, 'group-normal');
+    assert.equal(f.groupRetries.length, 1);
+    assert.equal(f.groupRetries[0].speakerId, 1);
     assert.deepEqual(f.ctx.chat.map(m => m.name), ['User', 'Helena', 'Mio']);
     assert.deepEqual(entryLabels(f.forcedRequests[0]), ['Pirate', 'Elf']);
     assert.deepEqual(entryLabels(f.forcedRequests[1]), ['Dwarf'], 'no previous speaker forced lore should leak into Mio');
@@ -542,4 +589,39 @@ test('UI clamps maximum generation passes between 1 and 8', async () => {
     assert.equal(edit('-5'), '1');
     assert.equal(edit('4.7'), '5');
     assert.ok(f.saves.settings >= 4);
+});
+
+
+test('last group member retry targets only that speaker after wrapper finishes', async () => {
+    const f = build({ group: true, drafts: ['Helena speaks using elf lore.'] });
+    await f.ready;
+    f.ctx.chat.push(f.user());
+    f.speaker(0);
+    f.setGroupGenerating(true);
+    await f.emit('generation_started', 'normal');
+    await f.initial('An elf enters.', [], 0);
+    f.setGroupGenerating(false);
+    await f.emit('group_wrapper_finished');
+    assert.equal(f.groupRetries.length, 1);
+    assert.deepEqual(f.ctx.chat.map(m => m.name), ['User', 'Helena']);
+    assert.equal(f.generated.length, 1);
+    assert.equal(f.generated[0].kind, 'group-normal');
+    assert.match(f.statuses.textContent, /stable after 2 passes/);
+});
+
+test('group wrapper retry error restores last member without removing user input', async () => {
+    const f = build({ group: true, generateError: new Error('Backend unavailable') });
+    await f.ready;
+    f.ctx.chat.push(f.user());
+    f.speaker(0);
+    f.setGroupGenerating(true);
+    await f.emit('generation_started', 'normal');
+    await f.initial('An elf enters.', [], 0);
+    f.setGroupGenerating(false);
+    await f.emit('group_wrapper_finished');
+    assert.equal(f.ctx.chat.length, 2);
+    assert.equal(f.ctx.chat[0].is_user, true);
+    assert.equal(f.ctx.chat[1].mes, 'An elf enters.');
+    assert.match(f.statuses.textContent, /Error: Backend unavailable/);
+    assert.ok(f.saves.messages > 0);
 });

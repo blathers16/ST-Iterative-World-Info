@@ -4,39 +4,19 @@
 
 Unlike SillyTavern's built-in **recursive scanning**, which can find keywords inside activated World Info entries, this extension scans a **newly generated draft**. In group chats, **each character's reply is handled independently**: the extension finishes that character's retries before the next member generates.
 
-## Installation (GitHub — recommended)
+## Installation (manual folder)
 
-**Repository:** https://github.com/blathers16/ST-Iterative-World-Info
+**Updating an existing installation:** Extract this ZIP directly into your existing `ST-Iterative-World-Info` extension directory, overwriting the files there. The ZIP contains files at its root (no extra enclosing folder). Reload SillyTavern afterward.
 
-1. Make sure **Git** is installed on the computer running SillyTavern. SillyTavern uses Git to install extensions from repositories.
-2. In SillyTavern, open **Extensions → Install Extension**.
-3. Paste this repository URL into the Git URL field:
+For a new installation:
 
-   ```text
-   https://github.com/blathers16/ST-Iterative-World-Info
-   ```
+1. Extract the extension files into a folder named `ST-Iterative-World-Info`.
+2. Place that folder under `SillyTavern/data/<user-handle>/extensions/`. A common location is `SillyTavern/data/default-user/extensions/ST-Iterative-World-Info/`.
+3. Make sure `manifest.json`, `index.js`, `core.mjs`, `settings.html`, and `style.css` are directly inside the extension folder, without an extra nested directory.
+4. Reload SillyTavern, then open **Extensions → Iterative World Info**.
+5. Turn on **Enable automatic lore-aware regeneration** (off by default). Start with **Maximum generation passes = 3**.
 
-4. Install from the default branch (`main`). If you use multiple SillyTavern users, select the appropriate installation target (usually **Current User**).
-5. Once installation finishes, reload SillyTavern if the extension does not appear automatically.
-6. Open **Extensions** settings and expand **Iterative World Info**. Turn on **Enable automatic lore-aware regeneration** (off by default). Start with **Maximum generation passes = 3**.
-
-### Updating a GitHub installation
-
-In SillyTavern, open **Extensions → Manage Extensions**, find **Iterative World Info**, and use its **Update** action when a new version is available. Reload SillyTavern if prompted. Updates are pulled from the installed Git repository.
-
-### Switching from an older manual ZIP installation
-
-If you previously copied the extension into `data/<user-handle>/extensions/ST-Iterative-World-Info/` by hand, back up any local changes first. That directory usually has no Git metadata, so **do not assume the Install Extension tool can convert it into a Git-managed installation in place**. Move or remove the old extension folder before installing from the repository to avoid a destination-folder conflict. Do not keep two copies of the same extension active.
-
-### Manual installation (alternative)
-
-If you cannot use Git-based installation, download the repository's source ZIP from GitHub (**Code → Download ZIP**) and extract it. Place the folder containing `manifest.json` at:
-
-```text
-SillyTavern/data/<user-handle>/extensions/ST-Iterative-World-Info/
-```
-
-For a typical single-user installation, `<user-handle>` is `default-user`. Make sure `manifest.json` and `index.js` are directly inside the extension folder rather than inside another nested directory. Reload SillyTavern and enable the extension as described above. **Manual ZIP installations are not automatically updated through Git**; replace their files manually when updating.
+SillyTavern's **Install Extension** field expects a Git repository URL rather than a local ZIP. If installing from an archive, extract and copy the folder manually.
 
 ## Example
 
@@ -57,7 +37,7 @@ Revisions may change the story in response to added lore. Earlier draft text is 
 6. Compare what the scanner requires, **plus all lore accumulated from earlier passes**, with what `WORLD_INFO_ACTIVATED` reported for the current generation. If anything is missing, accumulate it and request the complete required set using `WORLDINFO_FORCE_ACTIVATE` before regenerating the **same last assistant message**.
 7. Continue until there are no missing entries or the pass limit is reached. On success, leave the final reply; on pass-limit failure, leave the last reply and report an unstable result.
 
-**Group behavior:** A group turn is **not** rerolled as a whole. Each speaker has an independent cycle. The preceding speaker's accepted response remains available in the chat when the next speaker starts.
+**Group behavior:** A group turn is **not** rerolled as a whole. Each speaker has an independent cycle. The preceding speaker's accepted response remains available in the chat when the next speaker starts. While the original group wrapper is still running, the extension can retry the current member directly. For the **final group member**, SillyTavern has already ended that wrapper; the extension therefore removes only that member's draft and starts a one-member group generation using `force_chid`. This avoids accidentally regenerating the entire group.
 
 ## Settings
 
@@ -97,7 +77,7 @@ The optional full-text setting prints the **raw World Info entry content**, not 
 
 ## Scope and limitations
 
-- **Experimental.** Runtime behavior depends on SillyTavern's generation and World Info event contracts. All **27 included automated tests pass** in a mocked frontend environment, but live SillyTavern/KoboldCpp/llama.cpp integration has not been verified by those tests; see **Development and tests** below.
+- **Experimental.** Runtime behavior depends on SillyTavern's generation and World Info event contracts. All **29 included automated tests pass** in a mocked frontend environment, but live SillyTavern/KoboldCpp/llama.cpp integration has not been verified by those tests; see **Development and tests** below.
 - **Lore availability is not lore compliance.** A stable result means the scan found no additional entries missing from the set reported as activated for the latest generation. It does not guarantee that the model follows those entries.
 - **Cumulative within a cycle, not between characters.** Originally activated lore and all newly discovered lore are requested again for that same character's retries. The next group character starts a fresh cycle and independently scans the finalized chat context.
 - **Activation restrictions still matter.** Force requests do not guarantee inclusion if SillyTavern excludes an entry because of budget, filters, groups, probability, or other activation conditions. Repeatedly missing entries may result in an **UNSTABLE** pass-limit report.
@@ -116,7 +96,7 @@ The optional full-text setting prints the **raw World Info entry content**, not 
 - **DISCOVERED appears but no later ADDED:** Check for World Info activation restrictions, budget, or a failed regeneration. `DISCOVERED` records a scan result, not confirmation of insertion.
 - **Original lore shows as missing later:** Review `[IWI-LORE] ... MISSING ORIGINAL` warnings. The extension requests cumulative lore on retries, but the World Info engine may not report all requests as activated.
 - **Different results between passes:** Newly activated lore changes the prompt, so even with a fixed sampler seed the response may change. With random sampling enabled, each generation may also use a different seed.
-- **Unexpected group behavior:** Disable the extension, preserve a copy of the chat, and inspect the browser console for `[Iterative World Info]` errors. Test with a small group before using important conversations.
+- **Unexpected group behavior:** Disable the extension, preserve a copy of the chat, and inspect the browser console for `[Iterative World Info]` errors. `Retry validation failed` now logs the expected speaker, the actual final speaker/avatar, the chat-match result, and message positions. If a final group member needs a retry, the extension runs a one-member group generation rather than calling ordinary `regenerate`. Test with a small group before using important conversations.
 - **Detailed troubleshooting:** Enable **Detailed logs in browser console** and make sure your developer console displays Debug-level messages.
 
 ## Development and tests
@@ -129,7 +109,7 @@ node --check index.js
 node --test tests/*.test.mjs
 ```
 
-**Verified against the current ZIP (November 4, 2026, Node.js 22.16.0):** `node --check index.js` succeeds and **all 27 tests pass** (0 failed, 0 skipped, 0 TODO). The suite exercises thinking-inclusive scans, Include Names, per-character group sequencing, cumulative and baseline lore, pass limits, logging, untouched random/fixed seeds across backends, cancellation, and recovery after a regeneration error. In the error regression, the original reply is restored and the reported status preserves the backend error (`Error: Backend unavailable`).
+**Verified against this updated ZIP (November 18, 2026):** `node --check index.js` succeeds and **all 29 tests pass** (0 failed, 0 skipped, 0 TODO). The suite exercises thinking-inclusive scans, Include Names, per-character group sequencing (including the final group member after the wrapper finishes), cumulative and baseline lore, pass limits, logging, untouched random/fixed seeds across backends, cancellation, and recovery after a regeneration error. In the error regression, the original reply is restored and the reported status preserves the backend error (`Error: Backend unavailable`).
 
 These tests mock SillyTavern events and APIs; they are **not** live integration tests. The suite does not independently prove that a particular SillyTavern release waits for the group event handlers or that every World Info entry reaches the final prompt. Test in a disposable chat before relying on it for important sessions.
 

@@ -1,5 +1,6 @@
 import { checkWorldInfo, world_info_include_names } from '/scripts/world-info.js';
 import { setCharacterId, setCharacterName } from '/script.js';
+import { generateGroupWrapper, is_group_generating } from '/scripts/group-chats.js';
 import {
     assistantBatch, entryKey, newEntries, resolveSpeaker, stripReasoning,
     uniqueEntries,
@@ -283,8 +284,27 @@ async function replaceDrafts(cycle, messages) {
     cycle.suppliedThisPass.clear();
     await forceLore(cycle);
     try {
-        await c.generate('regenerate');
+        // Once SillyTavern finishes the group wrapper, its is_group_generating
+        // flag is already false. A direct Generate('regenerate') would then
+        // start a NEW group wrapper instead of replacing this one member.
+        // Remove only this member's draft and request a one-member group turn.
+        if (cycle.groupId && !is_group_generating) {
+            await c.deleteLastMessage();
+            await generateGroupWrapper(true, 'normal', { force_chid: cycle.speakerId });
+        } else {
+            await c.generate('regenerate');
+        }
         if (!sessionMatches(cycle) || !collectMessages(cycle).length) {
+            const tail = ctx().chat.at(-1);
+            console.warn('[Iterative World Info] Retry validation failed', {
+                speaker: cycle.speakerName,
+                expectedSpeakerId: cycle.speakerId,
+                actualSpeaker: tail?.name,
+                actualAvatar: tail?.original_avatar,
+                chatMatches: sessionMatches(cycle),
+                tailIndex: ctx().chat.length - 1,
+                expectedIndex: index,
+            });
             throw new Error('Regeneration failed or the chat changed');
         }
     } catch (error) {
